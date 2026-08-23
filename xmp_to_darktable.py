@@ -113,10 +113,21 @@ def to_number(s):
         return None
 
 
-def build_actions(crs_values, mapping):
+def build_actions(crs_values, mapping, percent=100.0):
+    """percent mirrors Lightroom's preset-Amount slider: 100 applies the preset
+    exactly as authored, 0 would leave the photo untouched, and anything in
+    between linearly blends toward each attribute's neutral/untouched value.
+    Scaling the raw ACR value by percent/100 before computing the darktable
+    target works for every action type here, because in each case the
+    neutral/untouched darktable value is exactly what you get when the raw
+    ACR value is 0 (scale.b for plain sliders, COLORZONES_NEUTRAL for
+    colorzones nodes) -- so scaling the ACR value scales the *deviation*
+    from neutral proportionally, which is exactly what an Amount slider does.
+    """
     actions = []
     skipped = []
     used_keys = set()
+    pct = percent / 100.0
 
     for entry in mapping["entries"]:
         key = entry["crs_key"]
@@ -125,6 +136,7 @@ def build_actions(crs_values, mapping):
         if num is None:
             continue
         used_keys.add(key)
+        num *= pct
         scale = entry.get("scale", {"a": 1.0, "b": 0.0})
         value = num * scale["a"] + scale["b"]
         actions.append({
@@ -148,6 +160,7 @@ def build_actions(crs_values, mapping):
             if num is None:
                 continue
             used_keys.add(key)
+            num *= pct
             for a in colorzones_node_actions(num, channel):
                 group_actions.append({"crs_key": key, "raw_value": num, **a})
 
@@ -197,7 +210,13 @@ def main():
     ap.add_argument("output_json")
     ap.add_argument("--mapping", default=None,
                      help="Path to mapping.json (default: mapping.json next to this script)")
+    ap.add_argument("--percent", type=float, default=100.0,
+                     help="Preset strength 1-100, like Lightroom's Amount slider (default: 100)")
     args = ap.parse_args()
+
+    if not (1.0 <= args.percent <= 100.0):
+        print(f"--percent must be 1-100, got {args.percent}", file=sys.stderr)
+        sys.exit(1)
 
     mapping_path = args.mapping
     if mapping_path is None:
@@ -208,7 +227,7 @@ def main():
         mapping = json.load(f)
 
     crs_values = parse_crs_attributes(args.xmp_path)
-    actions, skipped = build_actions(crs_values, mapping)
+    actions, skipped = build_actions(crs_values, mapping, percent=args.percent)
 
     out = {"actions": actions, "skipped_crs_keys": skipped}
     with open(args.output_json, "w") as f:
@@ -223,7 +242,7 @@ def main():
             enable = a["enable_module"] or ""
             f.write(f"{a['crs_key']}|{a['path']}|{a['element']}|{a['effect']}|{a['speed']}|{enable}\n")
 
-    print(f"Wrote {len(actions)} action(s) to {args.output_json} and {actions_txt_path}")
+    print(f"Wrote {len(actions)} action(s) to {args.output_json} and {actions_txt_path} (strength: {args.percent:g}%)")
     if skipped:
         print(f"Skipped {len(skipped)} unmapped crs: key(s) (no darktable equivalent wired up yet):")
         for s in skipped:

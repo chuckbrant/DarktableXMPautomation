@@ -4,8 +4,10 @@
 # or headlessly to a rendered output file with -o.
 #
 # Usage:
-#   apply-lr-preset.sh <preset.xmp> <photo>                 (interactive darkroom)
-#   apply-lr-preset.sh -o <output> <preset.xmp> <photo>     (headless render)
+#   apply-lr-preset.sh [-p 1-100] <preset.xmp> <photo>                 (interactive darkroom)
+#   apply-lr-preset.sh [-p 1-100] -o <output> <preset.xmp> <photo>     (headless render)
+#
+# -p sets preset strength, like Lightroom's Amount slider (default: 50).
 
 set -euo pipefail
 
@@ -13,17 +15,52 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DARKTABLE_BIN="/Applications/darktable.app/Contents/MacOS/darktable"
 DARKTABLE_CLI_BIN="/Applications/darktable.app/Contents/MacOS/darktable-cli"
 
+print_help() {
+  cat <<'HELP'
+Usage:
+  apply-lr-preset.sh [-p 1-100] <preset.xmp> <photo>
+  apply-lr-preset.sh [-p 1-100] -o <output> <preset.xmp> <photo>
+
+Applies a Lightroom/Camera Raw .xmp preset to a photo in darktable.
+
+  <preset.xmp>   Lightroom/ACR XMP preset file
+  <photo>        Photo to apply it to
+
+Options:
+  -p 1-100    Preset strength, like Lightroom's Amount slider (default: 50)
+  -o output   Render headlessly to this file instead of opening darktable's
+              darkroom interactively (no GUI interaction needed)
+  -h          Show this help
+
+Examples:
+  apply-lr-preset.sh mypreset.xmp photo.jpg
+  apply-lr-preset.sh -p 75 mypreset.xmp photo.jpg
+  apply-lr-preset.sh -p 100 -o out.jpg mypreset.xmp photo.jpg
+
+Note: every -o run force-quits any darktable process currently running on
+this machine before starting, since darktable only allows one instance.
+HELP
+}
+
 OUTPUT_PATH=""
-while getopts "o:" opt; do
+PERCENT=50
+while getopts "o:p:h" opt; do
   case "$opt" in
     o) OUTPUT_PATH="$OPTARG" ;;
-    *) echo "Usage: $0 [-o output] <preset.xmp> <photo>" >&2; exit 1 ;;
+    p) PERCENT="$OPTARG" ;;
+    h) print_help; exit 0 ;;
+    *) print_help >&2; exit 1 ;;
   esac
 done
 shift $((OPTIND - 1))
 
 if [ $# -ne 2 ]; then
-  echo "Usage: $0 [-o output] <preset.xmp> <photo>" >&2
+  print_help >&2
+  exit 1
+fi
+
+if ! [[ "$PERCENT" =~ ^[0-9]+$ ]] || [ "$PERCENT" -lt 1 ] || [ "$PERCENT" -gt 100 ]; then
+  echo "-p must be an integer 1-100, got: $PERCENT" >&2
   exit 1
 fi
 
@@ -69,11 +106,11 @@ pkill -9 -f "/Applications/darktable.app/Contents/MacOS/darktable" 2>/dev/null |
 sleep 1
 find ~/.config/darktable -maxdepth 1 -iname "lock*" -delete 2>/dev/null || true
 
-python3 "$SCRIPT_DIR/xmp_to_darktable.py" "$XMP_PATH" "$ACTIONS_JSON"
+python3 "$SCRIPT_DIR/xmp_to_darktable.py" "$XMP_PATH" "$ACTIONS_JSON" --percent "$PERCENT"
 ACTIONS_TXT="${ACTIONS_JSON%.json}.txt"
 
 if [ -z "$OUTPUT_PATH" ]; then
-  echo "Launching darktable on: $PHOTO_PATH"
+  echo "Launching darktable on: $PHOTO_PATH (strength: ${PERCENT}%)"
   DT_XMP_PRESET_ACTIONS="$ACTIONS_TXT" "$DARKTABLE_BIN" "$PHOTO_PATH"
   exit 0
 fi
@@ -90,7 +127,7 @@ if [ -f "$XMP_SIDECAR" ]; then
   BEFORE_MTIME=$(stat -f %m "$XMP_SIDECAR")
 fi
 
-echo "Applying preset to $PHOTO_PATH (headless)..."
+echo "Applying preset to $PHOTO_PATH (headless, strength: ${PERCENT}%)..."
 DT_XMP_PRESET_ACTIONS="$ACTIONS_TXT" "$DARKTABLE_BIN" "$PHOTO_PATH" &
 DT_PID=$!
 

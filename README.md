@@ -68,6 +68,15 @@ No manual install step needed otherwise — the first run of `apply-lr-preset.sh
 ./apply-lr-preset.sh -o <output.jpg> <preset.xmp> <photo>
 ```
 
+**Control preset strength** with `-p 1-100`, mirroring Lightroom's Amount slider — 100 applies the preset exactly as authored, and anything lower blends proportionally toward the untouched photo. Defaults to 50 if omitted:
+
+```bash
+./apply-lr-preset.sh -p 75 <preset.xmp> <photo>
+./apply-lr-preset.sh -p 100 -o <output.jpg> <preset.xmp> <photo>
+```
+
+Run `./apply-lr-preset.sh -h` for full usage.
+
 The headless flow: launches darktable in the background with the photo, lets the Lua script apply the edits, waits for darktable to auto-write the `.xmp` sidecar (it does this on its own, a few seconds after a history change — confirmed empirically, no explicit "save" call exists in darktable's Lua API), then force-quits that darktable instance and calls `darktable-cli` to render the final image from the sidecar.
 
 **Important:** darktable only allows one running instance. Every `-o` run force-quits *any* darktable process currently running on your machine before starting, to guarantee a clean slate — including a window you have open for unrelated manual editing. There's no unsaved-work check; if you're actively using darktable, don't run this at the same time.

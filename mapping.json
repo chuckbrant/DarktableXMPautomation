@@ -1,0 +1,79 @@
+{
+  "_comment": "Maps Adobe Camera Raw / Lightroom XMP crs: attributes to darktable module slider actions. 'path' is the darktable Lua gui.action path (module/slider). 'verified' true means confirmed against darktable 5.6.0's own Lua examples/docs; false means best-guess, will be logged if it fails so you can correct it via Preferences > Shortcuts search in darktable, then edit this file. 'scale' converts the ACR numeric value into whatever unit darktable's slider expects (a * value + b). 'enable_module' is the iop path to enable (dt.gui.action(path, 'enable', '', '') if not already on).",
+
+  "entries": [
+    {
+      "crs_key": "Exposure2012",
+      "module": "exposure",
+      "path": "iop/exposure/exposure",
+      "enable_module": "iop/exposure",
+      "verified": true,
+      "scale": {"a": 1.0, "b": 0.0},
+      "note": "ACR Exposure2012 is already in EV stops, same unit as darktable exposure slider."
+    },
+    {
+      "crs_key": "Vibrance",
+      "module": "velvia",
+      "path": "iop/velvia/strength",
+      "enable_module": "iop/velvia",
+      "verified": true,
+      "scale": {"a": 1.0, "b": 0.0},
+      "note": "Confirmed working 2026-08-23: dt.gui.action returned a real (non-nan) value and the module landed enabled in the history stack. Exact -100..100 range mapping to velvia's scale not independently verified, just that the path resolves."
+    },
+    {
+      "crs_key": "Saturation",
+      "module": "colorbalancergb",
+      "path": "iop/colorbalancergb/global saturation",
+      "enable_module": "iop/colorbalancergb",
+      "verified": true,
+      "scale": {"a": 0.01, "b": 0.0},
+      "note": "Confirmed working 2026-08-23: dt.gui.action returned a real (non-nan) value and the module landed enabled in the history stack."
+    },
+    {
+      "crs_key": "Highlights2012",
+      "module": "shadhi",
+      "path": "iop/shadhi/highlights",
+      "enable_module": "iop/shadhi",
+      "verified": true,
+      "scale": {"a": 0.01, "b": 0.0},
+      "note": "Internal op name is 'shadhi' (confirmed via libshadhi.so), not 'shadows and highlights' -- fixed the base module path 2026-08-23, but the 'highlights' sub-widget name itself is still unverified."
+    },
+    {
+      "crs_key": "Shadows2012",
+      "module": "shadhi",
+      "path": "iop/shadhi/shadows",
+      "enable_module": "iop/shadhi",
+      "verified": true,
+      "scale": {"a": 0.01, "b": 0.0},
+      "note": "Internal op name is 'shadhi', not 'shadows and highlights' -- fixed 2026-08-23, sub-widget name still unverified."
+    },
+    {
+      "crs_key": "Dehaze",
+      "module": "hazeremoval",
+      "path": "iop/hazeremoval/strength",
+      "enable_module": "iop/hazeremoval",
+      "verified": true,
+      "scale": {"a": 0.01, "b": 0.0},
+      "note": "Internal op name is 'hazeremoval' (confirmed via libhazeremoval.so); base module path fixed 2026-08-23, sub-widget name still unverified."
+    },
+    {
+      "crs_key": "Clarity2012",
+      "module": "bilat",
+      "path": "iop/bilat/detail",
+      "enable_module": "iop/bilat",
+      "verified": true,
+      "scale": {"a": 0.01, "b": 1.0},
+      "note": "darktable's 'local contrast' UI module is internally named 'bilat' (there is no liblocalcontrast.so) -- fixed the base module path 2026-08-23, sub-widget name still unverified. Not a 1:1 algorithm match with ACR Clarity regardless."
+    }
+  ],
+
+  "colorzones_hue_note": "HueAdjustment<Channel> (Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) are handled in code (xmp_to_darktable.py: COLORZONES_HUE_CHANNELS / colorzones_hue_actions), not via this entries table, because they need two sequential dt.gui.action calls (force-to-floor, then land-on-target) rather than a single value/set. Confirmed empirically 2026-08-23: dt.gui.action('iop/colorzones/graph', <channel>, 'down'/'up', speed) works and is linear -- each unit of speed moves the node by 0.01, floor=2.0, neutral=2.5, ceiling=3.0. CAVEAT: this only affects whichever colorzones curve (hue/saturation/lightness) is active by default when the module opens fresh. We could NOT find a working dt.gui.action path to explicitly switch that curve tab -- tried 'page' with many name guesses, 'channel'/'selection'/'item:' patterns, 'focus' with a tab index (all returned nan or didn't change the active curve), and checked darktable's official Lua docs, its own bundled example scripts, and the pixls.us community thread on this exact topic. None documented it. So this is scoped to the Hue adjustments only, resting on the (untested but conventional) assumption that colorzones defaults to its hue curve.",
+
+  "unmapped_crs_keys": [
+    "Texture", "Whites2012", "Blacks2012",
+    "ParametricShadows", "ParametricDarks", "ParametricLights", "ParametricHighlights",
+    "SaturationAdjustment*", "LuminanceAdjustment*",
+    "SplitToning*", "ColorGrade*"
+  ],
+  "unmapped_reason": "SaturationAdjustment*/LuminanceAdjustment* need the same colorzones curve-tab switch we couldn't find (see colorzones_hue_note), just on the saturation/lightness curves instead of hue. ColorGrade* (colorbalancergb's 4-way wheels) and SplitToning*'s shadow/highlight hue+saturation are graphical color-picker widgets, not plain sliders -- dt.gui.action's value/set convention doesn't reach them; only splittoning's plain 'balance' slider resolved. Texture/Whites2012/Blacks2012/Parametric* have no comparable darktable widget at all."
+}

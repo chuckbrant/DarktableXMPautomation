@@ -121,11 +121,39 @@ darktable.register_event("apply_xmp_preset", "darkroom-image-loaded",
     if not ok then
       log("UNCAUGHT ERROR while applying preset: " .. tostring(err))
     end
-    -- For headless/-o runs: darktable auto-writes the .xmp sidecar a few
-    -- seconds after a history change on its own (confirmed empirically
-    -- 2026-08-23 -- no explicit flush call needed, and no Lua API exists for
-    -- one anyway). The driving shell script just polls for that file to
-    -- appear/settle before killing this process.
+
+    -- darktable's own autosave (history -> database + .xmp sidecar) is
+    -- reactive, not on an independent timer: it re-checks its elapsed-time
+    -- condition only when another history-item event fires, and that
+    -- condition can't pass until ~20s after darkroom entry (autosave_time
+    -- is initialized to now+10s, and the check itself requires another
+    -- +10s past that -- confirmed empirically 2026-08-23 by instrumenting
+    -- darktable's own C source). If every action in actions_path fires
+    -- within the first few seconds (the normal case), NONE of them ever
+    -- lands in the database or sidecar without one more, genuinely-different
+    -- history event after that ~20s mark to trigger the check again -- when
+    -- that happens, the ENTIRE accumulated in-memory history (everything
+    -- applied above) gets flushed at once, not just the triggering action.
+    -- darktable.control.sleep() deep within a dispatched function (not
+    -- directly in this event handler -- doing it there deadlocks the
+    -- process, confirmed empirically) safely yields without blocking the
+    -- GTK main loop, so this fires as a background continuation.
+    darktable.control.dispatch(function()
+      darktable.control.sleep(22000)
+      local ok2, err2 = pcall(function()
+        -- iop/exposure always exists regardless of preset content, so this
+        -- is a safe universal flush trigger. Nudge away from neutral (0.0)
+        -- then back, so the final state is unaffected: the nudge is what
+        -- triggers the flush, the reset keeps black level correction clean.
+        darktable.gui.action("iop/exposure/black level correction", "value", "set", 0.00001)
+        darktable.gui.action("iop/exposure/black level correction", "value", "set", 0.0)
+      end)
+      if not ok2 then
+        log("UNCAUGHT ERROR while flush-triggering: " .. tostring(err2))
+      else
+        log("flush-triggered after 22s wait")
+      end
+    end)
   end
 )
 

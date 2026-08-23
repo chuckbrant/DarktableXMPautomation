@@ -127,44 +127,87 @@ if [ -f "$XMP_SIDECAR" ]; then
   BEFORE_MTIME=$(stat -f %m "$XMP_SIDECAR")
 fi
 
-echo "Applying preset to $PHOTO_PATH (headless, strength: ${PERCENT}%)..."
-DT_XMP_PRESET_ACTIONS="$ACTIONS_TXT" "$DARKTABLE_BIN" "$PHOTO_PATH" &
-DT_PID=$!
+# darktable 5.6.0 has an intermittent, pre-existing GTK-internal
+# memory-corruption crash triggered probabilistically by rapid dt.gui.action
+# automation (confirmed empirically 2026-08-23: identical actions against
+# the same freshly-restarted darktable sometimes ran clean, sometimes
+# crashed -- not deterministically tied to any specific action, mapping, or
+# activation method we could find, after extensive isolation attempts). Not
+# something fixable from this script's side. So: retry on crash rather than
+# fail outright -- a retry after a crash has consistently succeeded in
+# testing.
+MAX_ATTEMPTS=3
+attempt=1
+APPLIED=0
+while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+  echo "Applying preset to $PHOTO_PATH (headless, strength: ${PERCENT}%, attempt $attempt/$MAX_ATTEMPTS)..."
+  pkill -9 -f "/Applications/darktable.app/Contents/MacOS/darktable" 2>/dev/null || true
+  sleep 1
+  find ~/.config/darktable -maxdepth 1 -iname "lock*" -delete 2>/dev/null || true
 
-# A backgrounded, never-focused GUI process is subject to macOS App Nap,
-# which throttles its timers (confirmed empirically 2026-08-23: without
-# this, darktable's own auto-save-sidecar timer didn't fire within 60s).
-# Activating it keeps that timer running promptly.
-sleep 1
-osascript -e 'tell application "darktable" to activate' >/dev/null 2>&1 || true
+  DT_XMP_PRESET_ACTIONS="$ACTIONS_TXT" "$DARKTABLE_BIN" "$PHOTO_PATH" &
+  DT_PID=$!
 
-# darktable auto-writes the .xmp sidecar a few seconds after a history
-# change on its own (confirmed empirically 2026-08-23) -- no explicit flush
-# trigger exists in its Lua API, and forcing a view switch to hurry it along
-# segfaults this build. So: poll for the sidecar to appear/update, then
-# confirm its size is stable (write finished) before touching the process.
-TIMEOUT_S=60
-elapsed=0
-NEW_MTIME=0
-while :; do
-  if ! kill -0 "$DT_PID" 2>/dev/null; then
-    echo "darktable exited before writing the sidecar" >&2
-    exit 1
-  fi
-  if [ -f "$XMP_SIDECAR" ]; then
-    NEW_MTIME=$(stat -f %m "$XMP_SIDECAR")
-    if [ "$NEW_MTIME" -gt "$BEFORE_MTIME" ]; then
+  # A backgrounded, never-focused GUI process is subject to macOS App Nap,
+  # which throttles its timers (confirmed empirically 2026-08-23: without
+  # this, darktable's own auto-save-sidecar timer didn't fire within 60s).
+  # Activating it keeps that timer running promptly.
+  #
+  # Activate by PID via System Events, NOT `tell application "darktable" to
+  # activate` -- the latter appeared to make the crash above more likely
+  # when combined with this script's flow, while activating by PID did not,
+  # across extensive testing 2026-08-23 (though given the crash's
+  # intermittent nature, this is not a fully confirmed cause -- just the
+  # safer of the two known-working options).
+  sleep 1
+  timeout 8 osascript -e "
+tell application \"System Events\"
+  set frontmost of first process whose unix id is $DT_PID to true
+end tell" >/dev/null 2>&1 || true
+
+  # darktable's own autosave (history -> database + .xmp sidecar) is
+  # reactive, not on an independent timer, and its first possible flush is
+  # ~20s after darkroom entry (see apply_xmp_preset.lua's trailing
+  # flush-trigger, added 2026-08-23 after root-causing this by instrumenting
+  # darktable's own C source). So: poll for the sidecar to appear/update --
+  # comfortably past that ~20s mark -- then confirm its size is stable
+  # (write finished) before touching the process.
+  TIMEOUT_S=90
+  elapsed=0
+  NEW_MTIME=0
+  CRASHED=0
+  while :; do
+    if ! kill -0 "$DT_PID" 2>/dev/null; then
+      echo "darktable exited before writing the sidecar (crash on attempt $attempt)" >&2
+      CRASHED=1
       break
     fi
+    if [ -f "$XMP_SIDECAR" ]; then
+      NEW_MTIME=$(stat -f %m "$XMP_SIDECAR")
+      if [ "$NEW_MTIME" -gt "$BEFORE_MTIME" ]; then
+        APPLIED=1
+        break
+      fi
+    fi
+    if [ "$elapsed" -ge "$TIMEOUT_S" ]; then
+      echo "Timed out waiting for darktable to write the sidecar" >&2
+      kill -9 "$DT_PID" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  if [ "$APPLIED" -eq 1 ]; then
+    break
   fi
-  if [ "$elapsed" -ge "$TIMEOUT_S" ]; then
-    echo "Timed out waiting for darktable to write the sidecar" >&2
-    kill -9 "$DT_PID" 2>/dev/null || true
-    exit 1
-  fi
-  sleep 1
-  elapsed=$((elapsed + 1))
+  attempt=$((attempt + 1))
 done
+
+if [ "$APPLIED" -ne 1 ]; then
+  echo "darktable crashed on all $MAX_ATTEMPTS attempts" >&2
+  exit 1
+fi
 
 # Confirm the write has settled (size unchanged across two checks).
 PREV_SIZE=-1

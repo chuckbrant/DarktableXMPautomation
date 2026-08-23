@@ -15,8 +15,7 @@ These ACR preset attributes are mapped, tested, and confirmed landing correctly 
 | `Exposure2012` | `exposure` | Same units (EV), direct slider set |
 | `Vibrance` | `velvia` | Direct slider set |
 | `Saturation` | `colorbalancergb` (global saturation) | Direct slider set |
-| `Highlights2012` | `shadhi` (highlights) | Different algorithm than ACR's — approximate look match only |
-| `Shadows2012` | `shadhi` (shadows) | Same caveat as above |
+| `Highlights2012` / `Shadows2012` / `ParametricShadows/Darks/Lights/Highlights` | `shadhi` (highlights + shadows) | All 6 blended into shadhi's 2 sliders — see below |
 | `Dehaze` | `hazeremoval` (strength) | Direct slider set |
 | `Clarity2012` | `bilat` ("local contrast") | Not a 1:1 algorithm match with ACR's Clarity |
 | `HueAdjustment*` / `SaturationAdjustment*` / `LuminanceAdjustment*` (per-color-band, up to 8 bands each: Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) | `colorzones` (hue / chroma / lightness curves) | Not a slider — see below |
@@ -29,6 +28,14 @@ The `colorzones` channels use a curve-tab switch plus a 2-call trick rather than
 
 The calibration (floor=2.0, neutral=2.5, ceiling=3.0, each unit of `speed` moves the node by 0.01) is identical across all three tabs and was derived + confirmed empirically against this darktable build; documented in `xmp_to_darktable.py`.
 
+### ACR's parametric tone curve: a real dead end, and the fallback that worked
+
+`ParametricShadows/Darks/Lights/Highlights` are ACR's 4-zone parametric tone curve — no darktable widget is shaped the same way. `toneequal` ("tone equalizer") looked like the ideal match: its "simple" mode has 9 plain EV-band sliders (`-8 EV` through `+0 EV`), confirmed to be genuine `dt_bauhaus_slider_from_params`-bound sliders by reading darktable's actual C source (`src/iop/toneequal.c`) — not a curve/graph widget like colorzones or colorbalancergb.
+
+It still doesn't work. Across extensive testing — correct widget names, switching to the right page before setting values, expanding the module panel first, waiting well past any plausible debounce, forcing the enable toggle in isolation, and testing against completely fresh images to rule out stale-data artifacts — the slider visibly updates (confirmed both via `dt.gui.action`'s return value and a screenshot showing the correct EV values in the UI) but **nothing ever commits to darktable's history table** (checked directly via `sqlite3` on `library.db`). `filmicrgb`'s `contrast`/`latitude`/`balance` sliders (also genuine `dt_bauhaus_slider_from_params` bindings) were tried next on the same theory and hit the identical wall. Both failing modules share one trait every working module doesn't: they're already enabled by darktable's own auto-applied default workflow before any interaction, versus every module we successfully drive being off by default — the strongest available signal for why, though not confirmed as the root cause.
+
+**Fallback that actually works:** blend all 6 values (`Highlights2012`, `Shadows2012`, and the 4 parametric zones) into `shadhi`'s two proven-reliable sliders — `Shadows2012 + ParametricShadows + 0.5×ParametricDarks` into `shadows`, `Highlights2012 + ParametricHighlights + 0.5×ParametricLights` into `highlights`. Coarser than a real 4-zone system (2 zones, not 4; different algorithm than ACR's), but it's real and it commits.
+
 ## What we don't have, and why
 
 | ACR attribute(s) | Why it's not supported |
@@ -36,9 +43,8 @@ The calibration (floor=2.0, neutral=2.5, ceiling=3.0, each unit of `speed` moves
 | `ColorGrade*` (color-grading wheels: shadow/midtone/highlight/global hue+sat+lum) | `colorbalancergb`'s 4-way color wheels are a 2D graphical widget, not named sliders. `dt.gui.action`'s `value`/`set` convention can't reach them at all — its `page` selector only recognizes `"master"` and `"4 ways"` as valid pages, and neither exposes a plain `hue`/`chroma` slider afterward. |
 | `SplitToningShadowHue/Saturation`, `SplitToningHighlightHue/Saturation` | Same story as color grading — these are color-swatch buttons that open a picker, not sliders. Only `splittoning`'s plain `balance` slider is directly settable. |
 | `Texture`, `Whites2012`, `Blacks2012` | No comparable darktable control. |
-| `ParametricShadows/Darks/Lights/Highlights` | darktable's tone curve doesn't have named parametric zones the way ACR's does. |
 
-**Net coverage: 33 of 42 attributes** in a typical ACR "Look" preset (based on the reference preset used during development) — everything except the color-grading wheels, split-toning's color pickers, and a handful of fields with no darktable equivalent at all (Texture, Whites/Blacks, parametric tone splits).
+**Net coverage: 36 of 42 attributes** in a typical ACR "Look" preset (based on the reference preset used during development) — everything except the color-grading wheels, split-toning's color pickers, and a handful of fields with no darktable equivalent at all (Texture, Whites, Blacks).
 
 What's left is genuinely graphical (2D color wheels, color-swatch buttons), not just unmapped. A possible way to close some of that gap: clicking the actual widget via screen coordinates (`cliclick`/`osascript`) instead of `dt.gui.action` — viable for a small fixed button (a color swatch), less so for a continuous 2D drag target (a color wheel). Not implemented.
 

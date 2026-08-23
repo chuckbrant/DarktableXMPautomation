@@ -94,6 +94,47 @@ def colorzones_node_actions(acr_value, channel):
     ]
 
 
+# ACR's parametric tone curve has 4 zone sliders (-100..100, Shadows/Darks/
+# Lights/Highlights) and 3 split points, with no darktable widget shaped the
+# same way. toneequal's "simple" EV-band sliders looked like the ideal match
+# (confirmed real dt_bauhaus_slider_from_params-bound sliders, not a curve
+# widget -- unlike colorzones/colorbalancergb/splittoning's actual dead
+# ends), but reading darktable's C source (src/iop/toneequal.c) plus
+# extensive empirical testing (correct widget names, page-then-value
+# ordering, expanding the module panel, waiting well past any debounce,
+# forcing enable in isolation, testing against fresh images with zero prior
+# history to rule out stale-data artifacts) found that its value-changed
+# callback never calls dt_dev_add_history_item when driven via
+# dt.gui.action: the slider visibly updates but nothing commits. filmicrgb's
+# contrast/latitude/balance sliders (also genuine dt_bauhaus_slider_from_params
+# bindings) were tried next on the same theory and hit the identical wall.
+# Both failing modules share one thing every working module doesn't: they're
+# already enabled by darktable's own auto-applied default workflow (enable
+# query returns 1 before any interaction), vs. every module we successfully
+# drive being off by default -- the strongest available signal for why,
+# though not confirmed as the root cause.
+#
+# Fallback: blend into shadhi's two sliders, which are proven to commit
+# reliably. Coarser (2 zones, not 4) but real.
+SHADHI_DARKS_WEIGHT = 0.5   # Darks' partial contribution into shadhi's "shadows"
+SHADHI_LIGHTS_WEIGHT = 0.5  # Lights' partial contribution into shadhi's "highlights"
+
+
+def shadhi_blend_actions(highlights2012, shadows2012,
+                          parametric_shadows, parametric_darks,
+                          parametric_lights, parametric_highlights):
+    """Combines ACR's Highlights2012/Shadows2012 sliders with its 4-zone
+    parametric tone curve (Shadows/Darks/Lights/Highlights) into shadhi's two
+    real sliders. All inputs in ACR's -100..100 range; shadhi's scale is
+    0.01 (matching the existing Highlights2012/Shadows2012 mapping)."""
+    combined_shadows = shadows2012 + parametric_shadows + SHADHI_DARKS_WEIGHT * parametric_darks
+    combined_highlights = highlights2012 + parametric_highlights + SHADHI_LIGHTS_WEIGHT * parametric_lights
+    return [
+        {"path": "iop/shadhi/shadows", "element": "value", "effect": "set", "speed": combined_shadows * 0.01},
+        {"path": "iop/shadhi/highlights", "element": "value", "effect": "set", "speed": combined_highlights * 0.01},
+    ]
+
+
 def parse_crs_attributes(xmp_path):
     tree = ET.parse(xmp_path)
     root = tree.getroot()
@@ -189,6 +230,36 @@ def build_actions(crs_values, mapping, percent=100.0):
                 "note": f"colorzones {group_name}-graph node, force-floor then land-on-target",
             })
 
+    shadhi_keys = ["Highlights2012", "Shadows2012",
+                   "ParametricShadows", "ParametricDarks", "ParametricLights", "ParametricHighlights"]
+    shadhi_present = {k: to_number(crs_values.get(k)) for k in shadhi_keys}
+    if any(v is not None for v in shadhi_present.values()):
+        for k in shadhi_keys:
+            used_keys.add(k)
+        highlights2012 = (shadhi_present["Highlights2012"] or 0.0) * pct
+        shadows2012 = (shadhi_present["Shadows2012"] or 0.0) * pct
+        p_shadows = (shadhi_present["ParametricShadows"] or 0.0) * pct
+        p_darks = (shadhi_present["ParametricDarks"] or 0.0) * pct
+        p_lights = (shadhi_present["ParametricLights"] or 0.0) * pct
+        p_highlights = (shadhi_present["ParametricHighlights"] or 0.0) * pct
+
+        for i, a in enumerate(shadhi_blend_actions(highlights2012, shadows2012,
+                                                    p_shadows, p_darks, p_lights, p_highlights)):
+            actions.append({
+                "crs_key": "Highlights2012+Shadows2012+Parametric*",
+                "raw_value": a["speed"],
+                "element": a["element"],
+                "effect": a["effect"],
+                "speed": a["speed"],
+                "path": a["path"],
+                "enable_module": "iop/shadhi" if i == 0 else None,
+                "verified": True,
+                "note": ("combines ACR's Highlights2012/Shadows2012 with its 4-zone parametric "
+                         "tone curve into shadhi's 2 sliders -- coarser than a real 4-zone system, "
+                         "but shadhi is proven to commit reliably (see mapping.json shadhi_blend_note "
+                         "for why toneequal and filmicrgb, the closer matches, don't)"),
+            })
+
     present_keys = set(crs_values.keys())
     unused = present_keys - used_keys
     boilerplate = {"PresetType", "Cluster", "UUID", "SupportsAmount", "SupportsColor",
@@ -196,7 +267,6 @@ def build_actions(crs_values, mapping, percent=100.0):
                    "SupportsSceneReferred", "SupportsOutputReferred", "RequiresRGBTables",
                    "CameraModelRestriction", "Copyright", "ContactInfo", "Version",
                    "ProcessVersion", "ConvertToGrayscale", "HasSettings",
-                   "ParametricShadowSplit", "ParametricMidtoneSplit", "ParametricHighlightSplit",
                    "ColorGradeBlending", "SplitToningBalance"}
     for key in sorted(unused - boilerplate):
         skipped.append({"crs_key": key, "raw_value": crs_values[key]})

@@ -65,12 +65,21 @@ local function apply_actions(actions_path)
 
   for _, action in ipairs(actions) do
     if action.enable_module then
+      -- Query current state with speed=0 (the documented "just query, don't
+      -- act" value), not speed="" (an empty string -- not a documented value,
+      -- and likely why toneequal silently failed to enable in an earlier run:
+      -- 0 dt.gui.action failures reported, sliders set fine, but the module
+      -- never appeared in the history stack at all). Forcing enable
+      -- unconditionally instead of querying first is NOT safe: it crashed
+      -- darktable outright, most likely because it toggles an
+      -- already-enabled module (several are auto-enabled by default) OFF
+      -- instead of being a no-op.
       local ok_e, enabled = pcall(function()
-        return darktable.gui.action(action.enable_module, "enable", "", "")
+        return darktable.gui.action(action.enable_module, "enable", "", 0)
       end)
       if ok_e and enabled == 0.0 then
         pcall(function()
-          darktable.gui.action(action.enable_module, "enable", "", "1.0")
+          darktable.gui.action(action.enable_module, "enable", "", 1.0)
         end)
       end
     end

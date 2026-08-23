@@ -19,23 +19,28 @@ These ACR preset attributes are mapped, tested, and confirmed landing correctly 
 | `Shadows2012` | `shadhi` (shadows) | Same caveat as above |
 | `Dehaze` | `hazeremoval` (strength) | Direct slider set |
 | `Clarity2012` | `bilat` ("local contrast") | Not a 1:1 algorithm match with ACR's Clarity |
-| `HueAdjustment{Red,Orange,Yellow,Green,Aqua,Blue,Purple,Magenta}` | `colorzones` (hue curve) | Not a slider — see below |
+| `HueAdjustment*` / `SaturationAdjustment*` / `LuminanceAdjustment*` (per-color-band, up to 8 bands each: Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) | `colorzones` (hue / chroma / lightness curves) | Not a slider — see below |
 
-The `HueAdjustment*` channels use a 2-call trick rather than a simple slider `set`, because colorzones is a curve-editor widget, not sliders: first force the curve node to its floor with `dt.gui.action(..., "down", 1000)` (a large nudge reliably clamps to the floor regardless of starting position), then a single `up` call with a calibrated speed lands exactly on the target position. The calibration (floor=2.0, neutral=2.5, ceiling=3.0, each unit of `speed` moves the node by 0.01) was derived empirically against this darktable build and is documented in `xmp_to_darktable.py`.
+The `colorzones` channels use a curve-tab switch plus a 2-call trick rather than a simple slider `set`, because colorzones is a curve-editor widget with three separate curves (hue, saturation, lightness), not sliders:
+
+1. **Switch curve tab**: `dt.gui.action("iop/colorzones/channel", <tab>, "activate", 1.0)`, where `<tab>` is `"hue"`, `"chroma"` (= ACR Saturation), or `"lightness"` (= ACR Luminance). The widget is named `channel`, not `page` — found by reading darktable's actual C source (`src/iop/colorzones.c`), which also revealed the real tab names (`"chroma"`, not `"saturation"` — every earlier name-guess against a `page` widget had failed because of both the wrong widget name *and* the wrong page name).
+2. **Force to floor**: `dt.gui.action("iop/colorzones/graph", <channel>, "down", 1000)` — a large nudge reliably clamps to the floor regardless of starting position.
+3. **Land on target**: a single `up` call with a calibrated speed lands exactly on the target position.
+
+The calibration (floor=2.0, neutral=2.5, ceiling=3.0, each unit of `speed` moves the node by 0.01) is identical across all three tabs and was derived + confirmed empirically against this darktable build; documented in `xmp_to_darktable.py`.
 
 ## What we don't have, and why
 
 | ACR attribute(s) | Why it's not supported |
 |---|---|
-| `SaturationAdjustment*` / `LuminanceAdjustment*` (per-color-band) | Same `colorzones` module as Hue, but needs its *saturation* or *lightness* curve tab active instead of hue. **We could not find a working call to switch which curve tab is active** — tried the `page`/`activate` pattern (works for other modules), `channel`/`selection`/`item:` patterns, and a `focus`-with-tab-index pattern suggested by a Lightroom-adjacent AI hint. Checked darktable's official Lua docs, its own bundled example scripts, and the relevant pixls.us community thread. Nobody has published this. |
 | `ColorGrade*` (color-grading wheels: shadow/midtone/highlight/global hue+sat+lum) | `colorbalancergb`'s 4-way color wheels are a 2D graphical widget, not named sliders. `dt.gui.action`'s `value`/`set` convention can't reach them at all — its `page` selector only recognizes `"master"` and `"4 ways"` as valid pages, and neither exposes a plain `hue`/`chroma` slider afterward. |
 | `SplitToningShadowHue/Saturation`, `SplitToningHighlightHue/Saturation` | Same story as color grading — these are color-swatch buttons that open a picker, not sliders. Only `splittoning`'s plain `balance` slider is directly settable. |
 | `Texture`, `Whites2012`, `Blacks2012` | No comparable darktable control. |
 | `ParametricShadows/Darks/Lights/Highlights` | darktable's tone curve doesn't have named parametric zones the way ACR's does. |
 
-**Net coverage: 13 of 42 attributes** in a typical ACR "Look" preset (based on the reference preset used during development), but weighted toward what defines the *global* tonal/color feel — exposure, contrast-adjacent tone, vibrance/saturation, dehaze, clarity, and hue shifts. What's missing is entirely the *fine* color-grading layer (HSL saturation/luminance, split toning, color-grading wheels), which matters most for heavily stylized/graded presets.
+**Net coverage: 33 of 42 attributes** in a typical ACR "Look" preset (based on the reference preset used during development) — everything except the color-grading wheels, split-toning's color pickers, and a handful of fields with no darktable equivalent at all (Texture, Whites/Blacks, parametric tone splits).
 
-A possible way to close some of this gap: clicking the actual curve-tab button via screen coordinates (`cliclick`/`osascript`) instead of `dt.gui.action`, since that's one fixed, small, reliable click target — unlike the color-grading wheels, which are continuous 2D drag targets and not worth the fragility. Not implemented yet.
+What's left is genuinely graphical (2D color wheels, color-swatch buttons), not just unmapped. A possible way to close some of that gap: clicking the actual widget via screen coordinates (`cliclick`/`osascript`) instead of `dt.gui.action` — viable for a small fixed button (a color swatch), less so for a continuous 2D drag target (a color wheel). Not implemented.
 
 ## How it works
 
@@ -77,3 +82,7 @@ If a mapping in `mapping.json` stops working on a newer darktable version (its i
 - `xmp_to_darktable.py` — ACR XMP parser + action-list generator
 - `mapping.json` — ACR attribute → darktable action mapping table, with per-entry notes on what's verified vs. best-guess
 - `lua/apply_xmp_preset.lua` — runs inside darktable, replays the action list
+
+## AI assisted
+
+Claude

@@ -25,26 +25,67 @@ COLORZONES_FLOOR = 2.0
 COLORZONES_CEILING = 3.0
 COLORZONES_NEUTRAL = 2.5
 
-# ACR HueAdjustment<Channel> -> darktable colorzones channel name. Only the
-# channels this preset format can name are listed; darktable additionally
-# supports "red" and "magenta" (ACR: HueAdjustmentRed / HueAdjustmentMagenta).
-COLORZONES_HUE_CHANNELS = {
-    "HueAdjustmentRed": "red",
-    "HueAdjustmentOrange": "orange",
-    "HueAdjustmentYellow": "yellow",
-    "HueAdjustmentGreen": "green",
-    "HueAdjustmentAqua": "aqua",
-    "HueAdjustmentBlue": "blue",
-    "HueAdjustmentPurple": "purple",
-    "HueAdjustmentMagenta": "magenta",
+# colorzones has 3 curve tabs, each independently switchable via the widget
+# named "channel" (confirmed 2026-08-23 by reading darktable's actual C source,
+# src/iop/colorzones.c: dt_action_define_iop(self, NULL, N_("channel"), ...)
+# with pages named "lightness", "chroma", "hue" -- NOT "saturation", and NOT
+# reachable via a "page" widget, which is what every earlier guess assumed).
+# All three tabs share identical floor/neutral/ceiling calibration (confirmed
+# empirically by testing each tab directly).
+#
+# ACR HueAdjustment<Channel> / SaturationAdjustment<Channel> /
+# LuminanceAdjustment<Channel> -> (colorzones tab, channel name). Channel
+# names match darktable's regardless of tab; darktable additionally supports
+# "red" and "magenta" for all three ACR families.
+COLORZONES_GROUPS = {
+    "hue": {
+        "tab": "hue",
+        "keys": {
+            "HueAdjustmentRed": "red",
+            "HueAdjustmentOrange": "orange",
+            "HueAdjustmentYellow": "yellow",
+            "HueAdjustmentGreen": "green",
+            "HueAdjustmentAqua": "aqua",
+            "HueAdjustmentBlue": "blue",
+            "HueAdjustmentPurple": "purple",
+            "HueAdjustmentMagenta": "magenta",
+        },
+    },
+    "chroma": {
+        "tab": "chroma",
+        "keys": {
+            "SaturationAdjustmentRed": "red",
+            "SaturationAdjustmentOrange": "orange",
+            "SaturationAdjustmentYellow": "yellow",
+            "SaturationAdjustmentGreen": "green",
+            "SaturationAdjustmentAqua": "aqua",
+            "SaturationAdjustmentBlue": "blue",
+            "SaturationAdjustmentPurple": "purple",
+            "SaturationAdjustmentMagenta": "magenta",
+        },
+    },
+    "lightness": {
+        "tab": "lightness",
+        "keys": {
+            "LuminanceAdjustmentRed": "red",
+            "LuminanceAdjustmentOrange": "orange",
+            "LuminanceAdjustmentYellow": "yellow",
+            "LuminanceAdjustmentGreen": "green",
+            "LuminanceAdjustmentAqua": "aqua",
+            "LuminanceAdjustmentBlue": "blue",
+            "LuminanceAdjustmentPurple": "purple",
+            "LuminanceAdjustmentMagenta": "magenta",
+        },
+    },
 }
 
 
-def colorzones_hue_actions(acr_value, channel):
-    """Two dt.gui.action calls that deterministically land a colorzones hue-graph
-    node at the position corresponding to an ACR HueAdjustment value (-100..100),
-    regardless of the node's current position: force to the floor, then move up
-    by exactly enough to reach the target."""
+def colorzones_node_actions(acr_value, channel):
+    """Two dt.gui.action calls that deterministically land a colorzones graph
+    node (on whichever tab is currently active) at the position corresponding
+    to an ACR adjustment value (-100..100), regardless of the node's current
+    position: force to the floor, then move up by exactly enough to reach
+    the target."""
     target = COLORZONES_NEUTRAL + (acr_value / 100.0) * (COLORZONES_CEILING - COLORZONES_NEUTRAL)
     speed_up = (target - COLORZONES_FLOOR) * 100.0
     return [
@@ -98,23 +139,41 @@ def build_actions(crs_values, mapping):
             "note": entry.get("note", ""),
         })
 
-    for key, channel in COLORZONES_HUE_CHANNELS.items():
-        raw = crs_values.get(key)
-        num = to_number(raw)
-        if num is None:
+    colorzones_enabled_yet = False
+    for group_name, group in COLORZONES_GROUPS.items():
+        group_actions = []
+        for key, channel in group["keys"].items():
+            raw = crs_values.get(key)
+            num = to_number(raw)
+            if num is None:
+                continue
+            used_keys.add(key)
+            for a in colorzones_node_actions(num, channel):
+                group_actions.append({"crs_key": key, "raw_value": num, **a})
+
+        if not group_actions:
             continue
-        used_keys.add(key)
-        for i, a in enumerate(colorzones_hue_actions(num, channel)):
+
+        # One tab switch covers every channel in this group.
+        actions.append({
+            "crs_key": f"(colorzones tab switch: {group_name})",
+            "raw_value": None,
+            "element": group["tab"],
+            "effect": "activate",
+            "speed": 1.0,
+            "path": "iop/colorzones/channel",
+            "enable_module": "iop/colorzones" if not colorzones_enabled_yet else None,
+            "verified": True,
+            "note": "switches colorzones' active curve tab (widget name 'channel', confirmed via source)",
+        })
+        colorzones_enabled_yet = True
+
+        for a in group_actions:
             actions.append({
-                "crs_key": key,
-                "raw_value": num,
-                "element": a["element"],
-                "effect": a["effect"],
-                "speed": a["speed"],
-                "path": a["path"],
-                "enable_module": "iop/colorzones" if i == 0 else None,
+                **a,
+                "enable_module": None,
                 "verified": True,
-                "note": "colorzones hue-graph node, force-floor then land-on-target (see calibration notes)",
+                "note": f"colorzones {group_name}-graph node, force-floor then land-on-target",
             })
 
     present_keys = set(crs_values.keys())
